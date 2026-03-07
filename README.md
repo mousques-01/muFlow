@@ -151,6 +151,97 @@ git push origin nouvelle-fonction
 
 ---
 
+## Utilisation du Bluetooth dans Flutter
+
+Pour connecter le capteur de souffle à l’application, nous utiliserons le **Bluetooth Low Energy (BLE)**.
+
+Dans Flutter, cela se fait à l’aide d’une bibliothèque appelée :
+
+flutter_blue_plus
+
+### 1. Ajouter la bibliothèque
+
+Dans le fichier `pubspec.yaml`, ajouter :
+
+```yaml
+dependencies:
+  flutter_blue_plus: ^1.31.15
+```
+
+Puis installer les dépendances :
+
+```
+flutter pub get
+```
+
+---
+
+### 2. Scanner les appareils Bluetooth
+
+L’application peut rechercher les appareils Bluetooth disponibles :
+
+```dart
+FlutterBluePlus.startScan(timeout: Duration(seconds: 4));
+
+FlutterBluePlus.scanResults.listen((results) {
+  for (ScanResult r in results) {
+    print(r.device.name);
+  }
+});
+```
+
+Cela permet de détecter l’appareil (par exemple l’ESP32 connecté au capteur).
+
+---
+
+### 3. Se connecter à l’appareil
+
+Une fois l’appareil trouvé, l’application peut s’y connecter :
+
+```dart
+await device.connect();
+```
+
+---
+
+### 4. Recevoir les données du capteur
+
+Le microcontrôleur envoie des valeurs de souffle (par exemple `0.45`).  
+Flutter peut les recevoir et les utiliser pour mettre à jour l’interface :
+
+```dart
+characteristic.value.listen((value) {
+  String data = String.fromCharCodes(value);
+  double breath = double.parse(data);
+});
+```
+
+Cette valeur pourra ensuite être utilisée pour mettre à jour :
+
+- la **jauge de souffle**
+- le **score**
+- le **feedback musical (Perfect / Good / Miss)**
+
+---
+
+### Objectif
+
+À terme, le système complet fonctionnera ainsi :
+
+Souffle du musicien  
+↓  
+Capteur de pression  
+↓  
+Microcontrôleur (ESP32)  
+↓  
+Bluetooth  
+↓  
+Application Flutter  
+↓  
+Analyse du souffle et feedback musical
+
+---
+
 # Améliorations prévues
 
 Fonctionnalités à développer :
