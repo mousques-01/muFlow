@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_libserialport/flutter_libserialport.dart';
 
 void main() {
   runApp(const BreathCoachApp());
@@ -30,26 +32,27 @@ class BreathCoachApp extends StatelessWidget {
 class HomeMenu extends StatelessWidget {
   const HomeMenu({super.key});
 
-  Widget button(BuildContext context, String text, IconData icon, Widget page) {
-
+  Widget button(
+    BuildContext context,
+    String text,
+    IconData icon,
+    Widget page,
+  ) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),
-
       child: SizedBox(
         width: 260,
         height: 55,
-
         child: ElevatedButton.icon(
           icon: Icon(icon),
           label: Text(text),
-
           onPressed: () {
-
             Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => page),
+              MaterialPageRoute(
+                builder: (_) => page,
+              ),
             );
-
           },
         ),
       ),
@@ -58,30 +61,21 @@ class HomeMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-
     return Scaffold(
-
       body: Center(
-
         child: SingleChildScrollView(
-
           child: Padding(
             padding: const EdgeInsets.all(20),
-
             child: Column(
-
-              mainAxisAlignment: MainAxisAlignment.center,
-
+              mainAxisAlignment:
+                  MainAxisAlignment.center,
               children: [
-
                 const Icon(
                   Icons.music_note,
                   size: 60,
                   color: Colors.indigo,
                 ),
-
                 const SizedBox(height: 20),
-
                 const Text(
                   "BreathCoach",
                   style: TextStyle(
@@ -89,21 +83,43 @@ class HomeMenu extends StatelessWidget {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-
                 const SizedBox(height: 60),
-
-                button(context, "Commencer un exercice", Icons.play_arrow, const ExercisePage()),
-
-                button(context, "Entraînement", Icons.fitness_center, const TrainingPage()),
-
-                button(context, "Mode analyse", Icons.analytics, const AnalysisPage()),
-
-                button(context, "Historique", Icons.show_chart, const HistoryPage()),
-
-                button(context, "Présentation du projet", Icons.info, const AboutPage()),
-
-                button(context, "Mode d'emploi", Icons.menu_book, const HelpPage()),
-
+                button(
+                  context,
+                  "Commencer un exercice",
+                  Icons.play_arrow,
+                  const ExercisePage(),
+                ),
+                button(
+                  context,
+                  "Entraînement",
+                  Icons.fitness_center,
+                  const TrainingPage(),
+                ),
+                button(
+                  context,
+                  "Mode analyse",
+                  Icons.analytics,
+                  const AnalysisPage(),
+                ),
+                button(
+                  context,
+                  "Historique",
+                  Icons.show_chart,
+                  const HistoryPage(),
+                ),
+                button(
+                  context,
+                  "Présentation du projet",
+                  Icons.info,
+                  const AboutPage(),
+                ),
+                button(
+                  context,
+                  "Mode d'emploi",
+                  Icons.menu_book,
+                  const HelpPage(),
+                ),
               ],
             ),
           ),
@@ -118,375 +134,735 @@ class HomeMenu extends StatelessWidget {
 ////////////////////////////////////////////////////////////
 
 class ExercisePage extends StatefulWidget {
-  const ExercisePage({super.key});
+
+  final String title;
+
+  const ExercisePage({
+    super.key,
+    this.title = "Contrôle du souffle",
+  });
 
   @override
-  State<ExercisePage> createState() => _ExercisePageState();
+  State<ExercisePage> createState() =>
+      _ExercisePageState();
+
 }
 
-class _ExercisePageState extends State<ExercisePage> {
+class _ExercisePageState
+    extends State<ExercisePage> {
 
-  double offset = 0;
+  ////////////////////////////////////////////////////////////
+  /// BLUETOOTH
+  ////////////////////////////////////////////////////////////
 
-  double playerBreath = 0.5;
-  double expectedBreath = 0.35;
+  SerialPort? port;
 
-  int score = 0;
-  int combo = 0;
+  String serialBuffer = "";
 
-  String feedback = "";
-  String currentNote = "";
+  ////////////////////////////////////////////////////////////
+  /// SOUFFLE
+  ////////////////////////////////////////////////////////////
 
-  final melody = [
+  double breath = 0.0;
 
-   {"x":200.0,"y":75.0,"breath":0.30,"note":"G"},
-   {"x":260.0,"y":65.0,"breath":0.40,"note":"A"},
-   {"x":320.0,"y":55.0,"breath":0.50,"note":"B"},
-   {"x":380.0,"y":45.0,"breath":0.60,"note":"C"},
-   {"x":440.0,"y":55.0,"breath":0.50,"note":"B"},
-   {"x":500.0,"y":65.0,"breath":0.40,"note":"A"},
-   {"x":560.0,"y":75.0,"breath":0.30,"note":"G"},
+  ////////////////////////////////////////////////////////////
+  /// ZONE CIBLE
+  ////////////////////////////////////////////////////////////
 
-  ];
+  double targetMin = 0.20;
+  double targetMax = 0.45;
+
+  ////////////////////////////////////////////////////////////
+  /// EXERCICE
+  ////////////////////////////////////////////////////////////
+
+  int requiredSeconds = 10;
+
+  double secondsInZone = 0;
+
+  bool calibrationFinished = false;
+
+  bool exerciseCompleted = false;
+
+  DateTime? zoneStartTime;
+
+  ////////////////////////////////////////////////////////////
+  /// FILTRE PASSE BAS
+  ////////////////////////////////////////////////////////////
+
+  double previousFiltered = 0;
+
+  double lowPassFilter(double input) {
+
+    double alpha = 0.03;
+
+    previousFiltered =
+        alpha * input +
+        (1 - alpha) *
+            previousFiltered;
+
+    return previousFiltered;
+
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// INIT
+  ////////////////////////////////////////////////////////////
 
   @override
-  void initState(){
+  void initState() {
 
     super.initState();
 
-    Timer.periodic(const Duration(milliseconds:40),(timer){
+    connectBluetooth();
 
-      setState((){
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) {
 
-        /// défilement partition
-        offset -= 1.5;
-
-        /// souffle joueur simulé
-        double targetBreath = 0.2 + Random().nextDouble()*0.6;
-        playerBreath += (targetBreath - playerBreath) * 0.03;
-
-        /// NOTE ACTIVE basée sur la progression
-
-        int noteIndex = ((-offset) ~/ 60) % melody.length;
-
-        expectedBreath = melody[noteIndex]["breath"] as double;
-        currentNote = melody[noteIndex]["note"] as String;
-
-        /// zones scoring
-
-        double zone = 0.07;
-        double perfect = 0.02;
-
-        double lower = expectedBreath - zone;
-        double upper = expectedBreath + zone;
-
-        double pLow = expectedBreath - perfect;
-        double pHigh = expectedBreath + perfect;
-
-        if(playerBreath >= pLow && playerBreath <= pHigh){
-
-          feedback = "PERFECT";
-          score += 10;
-          combo++;
-
-        }
-
-        else if(playerBreath >= lower && playerBreath <= upper){
-
-          feedback = "GOOD";
-          score += 5;
-          combo++;
-
-        }
-
-        else{
-
-          feedback = "MISS";
-          combo = 0;
-
-        }
-
-      });
+      showExerciseDialog();
 
     });
 
   }
 
-  @override
-  Widget build(BuildContext context){
+  ////////////////////////////////////////////////////////////
+  /// CONFIGURATION
+  ////////////////////////////////////////////////////////////
 
-    return Scaffold(
+  void showExerciseDialog() {
 
-      appBar: AppBar(title: const Text("Exercice")),
+    final minController =
+        TextEditingController(
+      text: targetMin.toString(),
+    );
 
-      body: Padding(
-        padding: const EdgeInsets.all(20),
+    final maxController =
+        TextEditingController(
+      text: targetMax.toString(),
+    );
 
-        child: Column(
+    final durationController =
+        TextEditingController(
+      text: requiredSeconds.toString(),
+    );
 
-          children: [
+    showDialog(
 
-            /// PARTITION
+      context: context,
 
-            Card(
-              elevation:3,
+      barrierDismissible: false,
 
-              child: Container(
-                height:200,
-                padding:const EdgeInsets.all(20),
+      builder: (_) {
 
-                child: Stack(
+        return AlertDialog(
 
-                  children: [
+          title:
+              const Text(
+            "Configuration",
+          ),
 
-                    Column(
-                      mainAxisAlignment:MainAxisAlignment.center,
-                      children: List.generate(
-                        5,
-                        (index)=>Container(
-                          margin:const EdgeInsets.symmetric(vertical:6),
-                          height:2,
-                          color:Colors.black,
-                        ),
-                      ),
-                    ),
+          content: Column(
 
-                    const Positioned(
-                      left:10,
-                      top:50,
-                      child:Text(
-                        "𝄞",
-                        style:TextStyle(
-                          fontSize:70,
-                          fontFamily:"Bravura",
-                        ),
-                      ),
-                    ),
+            mainAxisSize:
+                MainAxisSize.min,
 
-                    const Positioned(
-                      left:420,
-                      top:0,
-                      bottom:0,
-                      child:VerticalDivider(
-                        thickness:3,
-                        color:Colors.red,
-                      ),
-                    ),
+            children: [
 
-                    ...melody.map((note){
+              TextField(
 
-                      double noteX = (note["x"] as double) + offset;
-                      bool active = (noteX - 420).abs() < 25;
+                controller:
+                    minController,
 
-                      return Positioned(
-
-                        left: noteX,
-                        top: note["y"] as double,
-
-                        child: Text(
-                          "𝅘𝅥",
-                          style: TextStyle(
-                            fontFamily:"Bravura",
-                            fontSize: active ? 48 : 40,
-                            color: active ? Colors.blue : Colors.black,
-                          ),
-                        ),
-
-                      );
-
-                    }).toList(),
-
-                  ],
-                ),
-              ),
-            ),
-
-            const SizedBox(height:30),
-
-            /// INFO NOTE
-
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-
-              children: [
-
-                Text(
-                  "Note : $currentNote",
-                  style: const TextStyle(
-                    fontSize:18,
-                    fontWeight:FontWeight.bold,
-                  ),
+                decoration:
+                    const InputDecoration(
+                  labelText:
+                      "Borne min",
                 ),
 
-                const SizedBox(height:4),
+              ),
 
-                Text(
-                  "Souffle cible pour $currentNote : ${expectedBreath.toStringAsFixed(2)}",
-                  style: const TextStyle(fontSize:16),
+              const SizedBox(
+                  height: 10),
+
+              TextField(
+
+                controller:
+                    maxController,
+
+                decoration:
+                    const InputDecoration(
+                  labelText:
+                      "Borne max",
                 ),
 
-              ],
-            ),
+              ),
 
-            const SizedBox(height:20),
+              const SizedBox(
+                  height: 10),
 
-            /// BARRE DE SOUFFLE
+              TextField(
 
-            Card(
-              elevation:3,
+                controller:
+                    durationController,
 
-              child: Padding(
-                padding:const EdgeInsets.all(20),
-
-                child: Stack(
-
-                  children: [
-
-                    /// barre grise
-
-                    Container(
-                      width:600,
-                      height:24,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(10),
-                        color: Colors.grey.shade300,
-                      ),
-                    ),
-
-                    /// zone verte (goal)
-
-                    Positioned(
-                      left: expectedBreath * 600 - 40,
-                      child: Container(
-                        width:80,
-                        height:24,
-                        decoration: BoxDecoration(
-                          color: Colors.green.withOpacity(0.5),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                    ),
-
-                    /// souffle joueur (jaune)
-
-                    Positioned(
-                      left: playerBreath * 600 - 4,
-                      child: Container(
-                        width:8,
-                        height:24,
-                        color: Colors.yellow,
-                      ),
-                    ),
-
-                  ],
+                decoration:
+                    const InputDecoration(
+                  labelText:
+                      "Durée (s)",
                 ),
+
               ),
-            ),
 
-            const SizedBox(height:20),
+            ],
 
-            Text(
-              feedback,
-              style: const TextStyle(
-                fontSize:28,
-                fontWeight:FontWeight.bold,
-              ),
-            ),
+          ),
 
-            const SizedBox(height:6),
+          actions: [
 
-            Text(
-              "Combo : $combo",
-              style: const TextStyle(fontSize:18),
-            ),
+            ElevatedButton(
 
-            const SizedBox(height:6),
+              onPressed: () {
 
-            Text(
-              "Score : $score",
-              style: const TextStyle(
-                fontSize:24,
-                fontWeight:FontWeight.bold,
-              ),
+                setState(() {
+
+                  targetMin =
+                      double.tryParse(
+                            minController
+                                .text,
+                          ) ??
+                          0.20;
+
+                  targetMax =
+                      double.tryParse(
+                            maxController
+                                .text,
+                          ) ??
+                          0.45;
+
+                  requiredSeconds =
+                      int.tryParse(
+                            durationController
+                                .text,
+                          ) ??
+                          10;
+                });
+
+                Navigator.pop(
+                  context,
+                );
+
+              },
+
+              child:
+                  const Text("OK"),
+
             ),
 
           ],
-        ),
-      ),
+
+        );
+
+      },
+
     );
+
   }
-}
 
+  ////////////////////////////////////////////////////////////
+  /// BLUETOOTH
+  ////////////////////////////////////////////////////////////
 
-////////////////////////////////////////////////////////////
-/// ENTRAINEMENT
-////////////////////////////////////////////////////////////
+  void connectBluetooth() {
 
-class TrainingPage extends StatelessWidget {
-  const TrainingPage({super.key});
+    try {
 
-  Widget exercise(BuildContext context,
-      String title, String description) {
+      port = SerialPort("COM3");
 
-    return Card(
-      child: ListTile(
-        title: Text(title),
-        subtitle: Text(description),
-        trailing: const Icon(Icons.play_arrow),
+      bool opened =
+          port!.openReadWrite();
 
-        onTap: () {
+      if (opened) {
 
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) =>
-                  TrainingExercisePage(title: title),
-            ),
-          );
+        final reader =
+            SerialPortReader(port!);
 
-        },
-      ),
-    );
+        reader.stream.listen((data) {
+
+          try {
+
+            serialBuffer +=
+                String.fromCharCodes(data);
+
+            List<String> lines =
+                serialBuffer.split('\n');
+
+            serialBuffer =
+                lines.last;
+
+            for (int i = 0;
+                i < lines.length - 1;
+                i++) {
+
+              String received =
+                  lines[i].trim();
+
+              if (received.isEmpty) {
+                continue;
+              }
+
+              double adc =
+                  double.tryParse(
+                        received,
+                      ) ??
+                      0.0;
+
+              adc = adc.clamp(
+                0.0,
+                4095.0,
+              );
+
+              double voltage =
+                  (adc / 4095.0) *
+                      3.3;
+
+              double filtered =
+                  lowPassFilter(
+                    voltage,
+                  );
+
+              double normalized =
+                  (2.77 - filtered) /
+                      (2.77 - 2.40);
+
+              normalized =
+                  normalized.clamp(
+                0.0,
+                1.0,
+              );
+
+              if (!mounted) return;
+
+              setState(() {
+
+                breath =
+                    normalized;
+
+                //////////////////////////////////////
+                /// CALIBRAGE
+                //////////////////////////////////////
+
+                if (!calibrationFinished &&
+                    breath <= 0.05) {
+
+                  calibrationFinished =
+                      true;
+
+                }
+
+                //////////////////////////////////////
+                /// TEMPS DANS ZONE
+                //////////////////////////////////////
+
+                if (calibrationFinished &&
+                    !exerciseCompleted &&
+                    breath >= targetMin &&
+                    breath <= targetMax) {
+
+                  zoneStartTime ??=
+                      DateTime.now();
+
+                  secondsInZone =
+                      DateTime.now()
+                              .difference(
+                                zoneStartTime!,
+                              )
+                              .inMilliseconds /
+                          1000.0;
+
+                  if (secondsInZone >=
+                      requiredSeconds) {
+
+                    exerciseCompleted =
+                        true;
+
+                  }
+
+                }
+
+                else {
+
+                  zoneStartTime =
+                      null;
+
+                  if (!exerciseCompleted) {
+
+                    secondsInZone =
+                        0;
+
+                  }
+
+                }
+
+              });
+
+            }
+
+          }
+
+          catch (e) {
+
+            print(e);
+
+          }
+
+        });
+
+      }
+
+    }
+
+    catch (e) {
+
+      print(e);
+
+    }
+
   }
+
+
+  ////////////////////////////////////////////////////////////
+  /// DISPOSE
+  ////////////////////////////////////////////////////////////
+
+  @override
+  void dispose() {
+
+    port?.close();
+
+    super.dispose();
+
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// BUILD
+  ////////////////////////////////////////////////////////////
 
   @override
   Widget build(BuildContext context) {
 
     return Scaffold(
-      appBar: AppBar(title: const Text("Entraînement")),
 
-      body: Padding(
-        padding: const EdgeInsets.all(20),
+      appBar: AppBar(
+        title: Text(widget.title),
+      ),
 
-        child: ListView(
+      body: Center(
 
-          children: [
+        child: Padding(
 
-            exercise(context,
-                "Note longue",
-                "Maintenir un souffle stable"),
+          padding:
+              const EdgeInsets.all(30),
 
-            exercise(context,
-                "Piano",
-                "Souffle faible contrôlé"),
+          child: Column(
 
-            exercise(context,
-                "Forte",
-                "Souffle puissant"),
+            mainAxisAlignment:
+                MainAxisAlignment.center,
 
-            exercise(context,
-                "Stabilité",
-                "Maintenir une pression constante"),
+            children: [
 
-          ],
+              //////////////////////////////////////////////////
+              /// TITRE
+              //////////////////////////////////////////////////
+
+              const Text(
+
+                "Maintenir le trait noir dans la zone verte",
+
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight:
+                      FontWeight.bold,
+                ),
+
+                textAlign:
+                    TextAlign.center,
+
+              ),
+
+              const SizedBox(height: 60),
+
+              //////////////////////////////////////////////////
+              /// BARRE
+              //////////////////////////////////////////////////
+
+              Container(
+
+                width: 550,
+                height: 90,
+
+                decoration: BoxDecoration(
+
+                  border: Border.all(
+                    color: Colors.black,
+                    width: 2,
+                  ),
+
+                  borderRadius:
+                      BorderRadius.circular(
+                          12),
+
+                ),
+
+                child: Stack(
+
+                  children: [
+
+                    //////////////////////////////////////////////
+                    /// ZONE VERTE
+                    //////////////////////////////////////////////
+
+                    Positioned(
+
+                      left:
+                          targetMin * 550,
+
+                      width:
+                          (targetMax -
+                                  targetMin) *
+                              550,
+
+                      top: 0,
+                      bottom: 0,
+
+                      child: Container(
+
+                        decoration:
+                            BoxDecoration(
+
+                          color:
+                              Colors.green
+                                  .withOpacity(
+                                      0.4),
+
+                          borderRadius:
+                              BorderRadius
+                                  .circular(
+                                      10),
+
+                        ),
+
+                      ),
+
+                    ),
+
+                    //////////////////////////////////////////////
+                    /// TRAIT NOIR
+                    //////////////////////////////////////////////
+
+                    Positioned(
+
+                      left:
+                          (breath * 545)
+                              .clamp(
+                                  0.0,
+                                  545.0),
+
+                      top: 0,
+                      bottom: 0,
+
+                      child: Container(
+
+                        width: 5,
+
+                        color:
+                            Colors.black,
+
+                      ),
+
+                    ),
+
+                  ],
+
+                ),
+
+              ),
+
+              const SizedBox(height: 50),
+
+              //////////////////////////////////////////////////
+              /// VALEUR
+              //////////////////////////////////////////////////
+
+              Text(
+
+                "Souffle normalisé : ${breath.toStringAsFixed(2)}",
+
+                style: const TextStyle(
+                  fontSize: 22,
+                ),
+
+              ),
+
+              const SizedBox(height: 15),
+
+              //////////////////////////////////////////////////
+              /// TEMPS
+              //////////////////////////////////////////////////
+
+              Text(
+
+                "Temps dans la zone : ${secondsInZone.toStringAsFixed(1)} s",
+
+                style: const TextStyle(
+                  fontSize: 22,
+                ),
+
+              ),
+
+              const SizedBox(height: 10),
+
+              Text(
+
+                "Objectif : $requiredSeconds s",
+
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight:
+                      FontWeight.bold,
+                ),
+
+              ),
+
+              const SizedBox(height: 25),
+
+              //////////////////////////////////////////////////
+              /// FEEDBACK
+              //////////////////////////////////////////////////
+
+              if (!calibrationFinished)
+
+                const Text(
+
+                  "Calibration : relâchez complètement le souffle",
+
+                  textAlign:
+                      TextAlign.center,
+
+                  style: TextStyle(
+
+                    color:
+                        Colors.orange,
+
+                    fontSize: 28,
+
+                    fontWeight:
+                        FontWeight.bold,
+
+                  ),
+
+                )
+
+              else if (exerciseCompleted)
+
+                const Text(
+
+                  "EXERCICE RÉUSSI",
+
+                  style: TextStyle(
+
+                    color:
+                        Colors.green,
+
+                    fontSize: 36,
+
+                    fontWeight:
+                        FontWeight.bold,
+
+                  ),
+
+                )
+
+              else if (breath >= targetMin &&
+                       breath <= targetMax)
+
+                const Text(
+
+                  "BON CONTRÔLE",
+
+                  style: TextStyle(
+
+                    color:
+                        Colors.green,
+
+                    fontSize: 30,
+
+                    fontWeight:
+                        FontWeight.bold,
+
+                  ),
+
+                )
+
+              else
+
+                const Text(
+
+                  "HORS ZONE",
+
+                  style: TextStyle(
+
+                    color:
+                        Colors.red,
+
+                    fontSize: 30,
+
+                    fontWeight:
+                        FontWeight.bold,
+
+                  ),
+
+                ),
+
+            ],
+
+          ),
 
         ),
+
       ),
+
     );
+
   }
+
 }
 
-class TrainingExercisePage extends StatefulWidget {
+
+/////////////////////////////////////////////////////////////
+/// TRAINING
+////////////////////////////////////////////////////////////
+
+class TrainingPage extends StatelessWidget {
+
+  const TrainingPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+
+    return const TrainingExercisePage(
+      title: "Contrôle du souffle",
+    );
+
+  }
+
+}
+
+////////////////////////////////////////////////////////////
+/// EXERCICE
+////////////////////////////////////////////////////////////
+
+class TrainingExercisePage
+    extends StatefulWidget {
 
   final String title;
 
@@ -496,596 +872,2014 @@ class TrainingExercisePage extends StatefulWidget {
   });
 
   @override
-  State<TrainingExercisePage> createState()
-      => _TrainingExercisePageState();
+  State<TrainingExercisePage>
+      createState() =>
+          _TrainingExercisePageState();
+
 }
 
 class _TrainingExercisePageState
-    extends State<TrainingExercisePage> {
+    extends State<
+        TrainingExercisePage> {
 
-  double breath = 0.5;
+  ////////////////////////////////////////////////////////////
+  /// PORT
+  ////////////////////////////////////////////////////////////
+
+  SerialPort? port;
+
+  ////////////////////////////////////////////////////////////
+  /// BUFFER SERIE
+  ////////////////////////////////////////////////////////////
+
+  String serialBuffer = "";
+
+  ////////////////////////////////////////////////////////////
+  /// SIGNAL
+  ////////////////////////////////////////////////////////////
+
+  double rawAdc = 0;
+
+  double breath = 0;
+
+  ////////////////////////////////////////////////////////////
+  /// FPS UI
+  ////////////////////////////////////////////////////////////
+
+  DateTime lastUpdate =
+      DateTime.now();
+
+  ////////////////////////////////////////////////////////////
+  /// PASSE-BAS
+  ////////////////////////////////////////////////////////////
+
+  double filteredSignal =
+      3350;
+
+  double lowPassFilter(
+      double input) {
+
+    //////////////////////////////////////////////////////////
+    /// FILTRE LISSE
+    //////////////////////////////////////////////////////////
+
+    double alpha = 0.12;
+
+    filteredSignal =
+        alpha * input +
+        (1 - alpha) *
+            filteredSignal;
+
+    return filteredSignal;
+
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// HISTORIQUE FILTRE
+  ////////////////////////////////////////////////////////////
+
+  List<double> history = [];
+
+  ////////////////////////////////////////////////////////////
+  /// INIT
+  ////////////////////////////////////////////////////////////
 
   @override
   void initState() {
 
     super.initState();
 
-    Timer.periodic(const Duration(milliseconds: 200), (timer) {
-
-      setState(() {
-
-        breath += (Random().nextDouble() - 0.5) * 0.05;
-        breath = breath.clamp(0.2, 0.9);
-
-      });
-
-    });
+    connectBluetooth();
 
   }
 
+  ////////////////////////////////////////////////////////////
+  /// BLUETOOTH
+  ////////////////////////////////////////////////////////////
+
+  void connectBluetooth() {
+
+    try {
+
+      port =
+          SerialPort("COM3");
+
+      bool opened =
+          port!
+              .openReadWrite();
+
+      if (opened) {
+
+        final reader =
+            SerialPortReader(
+                port!);
+
+        reader.stream.listen(
+            (data) {
+
+          try {
+
+            serialBuffer +=
+                String
+                    .fromCharCodes(
+                        data);
+
+            List<String>
+                lines =
+                serialBuffer
+                    .split(
+                        '\n');
+
+            serialBuffer =
+                lines.last;
+
+            for (int i = 0;
+                i <
+                    lines.length -
+                        1;
+                i++) {
+
+              String received =
+                  lines[i]
+                      .trim();
+
+              if (received
+                  .isEmpty) {
+                continue;
+              }
+
+              //////////////////////////////////////////////////
+              /// ADC
+              //////////////////////////////////////////////////
+
+              double adc =
+                  double.tryParse(
+                        received,
+                      ) ??
+                      0;
+
+              adc =
+                  adc.clamp(
+                0,
+                4095,
+              );
+
+              rawAdc = adc;
+
+              //////////////////////////////////////////////////
+              /// PASSE-BAS
+              //////////////////////////////////////////////////
+
+              double filtered =
+                  lowPassFilter(
+                      adc);
+
+              //////////////////////////////////////////////////
+              /// HISTORIQUE
+              /// ~250 ms
+              //////////////////////////////////////////////////
+
+              history.add(
+                  filtered);
+
+              if (history
+                      .length >
+                  5) {
+
+                history
+                    .removeAt(
+                        0);
+
+              }
+
+              //////////////////////////////////////////////////
+              /// PENTE
+              //////////////////////////////////////////////////
+
+              double slope =
+                  0;
+
+              if (history
+                      .length >=
+                  5) {
+
+                slope =
+                    history
+                            .first -
+                        history
+                            .last;
+
+              }
+
+              //////////////////////////////////////////////////
+              /// GARDE CHUTES
+              //////////////////////////////////////////////////
+
+              if (slope <
+                  0) {
+
+                slope = 0;
+
+              }
+
+              //////////////////////////////////////////////////
+              /// NORMALISATION
+              //////////////////////////////////////////////////
+
+              double normalized =
+                  slope /
+                      120.0;
+
+              normalized =
+                  normalized
+                      .clamp(
+                          0.0,
+                          1.0);
+
+              //////////////////////////////////////////////////
+              /// FPS UI
+              //////////////////////////////////////////////////
+
+              if (DateTime.now()
+                      .difference(
+                          lastUpdate)
+                      .inMilliseconds <
+                  50) {
+
+                continue;
+
+              }
+
+              lastUpdate =
+                  DateTime
+                      .now();
+
+              if (!mounted)
+                return;
+
+              setState(() {
+
+                breath =
+                    normalized;
+
+              });
+
+            }
+
+          } catch (e) {
+
+            print(e);
+
+          }
+
+        });
+
+      }
+
+    } catch (e) {
+
+      print(e);
+
+    }
+
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// DISPOSE
+  ////////////////////////////////////////////////////////////
+
   @override
-  Widget build(BuildContext context) {
+  void dispose() {
+
+    port?.close();
+
+    super.dispose();
+
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// BUILD
+  ////////////////////////////////////////////////////////////
+
+  @override
+  Widget build(
+      BuildContext context) {
+
+    double minRadius =
+        15;
+
+    double maxRadius =
+        170;
+
+    double currentRadius =
+        minRadius +
+            breath *
+                (maxRadius -
+                    minRadius);
+
+    double targetRadius =
+        90;
+
+    bool inTarget =
+        breath > 0.35 &&
+            breath < 0.60;
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+
+      backgroundColor:
+          Colors.black,
+
+      appBar: AppBar(
+
+        backgroundColor:
+            Colors.black,
+
+        title:
+            Text(
+                widget.title),
+
+      ),
 
       body: Center(
 
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+
+          mainAxisAlignment:
+              MainAxisAlignment
+                  .center,
 
           children: [
 
             const Text(
-              "Maintenir le souffle dans la zone verte",
-              style: TextStyle(fontSize: 20),
+
+              "Stabilise ton souffle",
+
+              style:
+                  TextStyle(
+
+                color:
+                    Colors.white,
+
+                fontSize:
+                    30,
+
+                fontWeight:
+                    FontWeight
+                        .bold,
+
+              ),
+
             ),
 
-            const SizedBox(height: 30),
+            const SizedBox(
+                height: 60),
+
+            //////////////////////////////////////////////////
+            /// CERCLES
+            //////////////////////////////////////////////////
 
             SizedBox(
-              width: 300,
 
-              child: LinearProgressIndicator(
-                value: breath,
-                minHeight: 20,
-                color: Colors.green,
+              width: 450,
+              height: 450,
+
+              child: Stack(
+
+                alignment:
+                    Alignment
+                        .center,
+
+                children: [
+
+                  ////////////////////////////////////////////
+                  /// CIBLE
+                  ////////////////////////////////////////////
+
+                  Container(
+
+                    width:
+                        targetRadius *
+                            2,
+
+                    height:
+                        targetRadius *
+                            2,
+
+                    decoration:
+                        BoxDecoration(
+
+                      shape:
+                          BoxShape
+                              .circle,
+
+                      color:
+                          Colors
+                              .green
+                              .withOpacity(
+                                  0.18),
+
+                      border:
+                          Border
+                              .all(
+
+                        color:
+                            Colors
+                                .green,
+
+                        width:
+                            4,
+
+                      ),
+
+                    ),
+
+                  ),
+
+                  ////////////////////////////////////////////
+                  /// CERCLE
+                  ////////////////////////////////////////////
+
+                  Container(
+
+                    width:
+                        currentRadius *
+                            2,
+
+                    height:
+                        currentRadius *
+                            2,
+
+                    decoration:
+                        BoxDecoration(
+
+                      shape:
+                          BoxShape
+                              .circle,
+
+                      color:
+                          Colors
+                              .white
+                              .withOpacity(
+                                  0.92),
+
+                      boxShadow: [
+
+                        BoxShadow(
+
+                          color:
+                              Colors
+                                  .white
+                                  .withOpacity(
+                                      0.25),
+
+                          blurRadius:
+                              25,
+
+                          spreadRadius:
+                              8,
+
+                        ),
+
+                      ],
+
+                    ),
+
+                  ),
+
+                ],
+
               ),
+
+            ),
+
+            const SizedBox(
+                height: 40),
+
+            //////////////////////////////////////////////////
+            /// FEEDBACK
+            //////////////////////////////////////////////////
+
+            Text(
+
+              inTarget
+                  ? "BON CONTRÔLE"
+                  : "AJUSTE TON SOUFFLE",
+
+              style:
+                  TextStyle(
+
+                color: inTarget
+                    ? Colors
+                        .green
+                    : Colors
+                        .orange,
+
+                fontSize:
+                    30,
+
+                fontWeight:
+                    FontWeight
+                        .bold,
+
+              ),
+
+            ),
+
+            const SizedBox(
+                height: 25),
+
+            //////////////////////////////////////////////////
+            /// DEBUG
+            //////////////////////////////////////////////////
+
+            Text(
+
+              "ADC : ${rawAdc.toStringAsFixed(0)}",
+
+              style:
+                  const TextStyle(
+
+                color: Colors
+                    .white70,
+
+                fontSize:
+                    20,
+
+              ),
+
+            ),
+
+            const SizedBox(
+                height: 10),
+
+            Text(
+
+              "Breath : ${breath.toStringAsFixed(2)}",
+
+              style:
+                  const TextStyle(
+
+                color: Colors
+                    .white38,
+
+                fontSize:
+                    16,
+
+              ),
+
             ),
 
           ],
 
         ),
+
       ),
+
     );
+
   }
+
 }
 
+
 ////////////////////////////////////////////////////////////
-/// ANALYSE
+/// ANALYSE BLUETOOTH
 ////////////////////////////////////////////////////////////
 
 class AnalysisPage extends StatefulWidget {
+
   const AnalysisPage({super.key});
 
   @override
-  State<AnalysisPage> createState() => _AnalysisPageState();
+  State<AnalysisPage> createState() =>
+      _AnalysisPageState();
+
 }
 
-class _AnalysisPageState extends State<AnalysisPage> {
+class _AnalysisPageState
+    extends State<AnalysisPage> {
 
-  List<double> history = List.generate(40, (index) => 0.5);
-  int pressure = 340;
+  ////////////////////////////////////////////////////////////
+  /// PORT COM
+  ////////////////////////////////////////////////////////////
 
-  double get breath => history.last;
+  SerialPort? port;
 
-  double get average =>
-      history.reduce((a, b) => a + b) / history.length;
+  ////////////////////////////////////////////////////////////
+  /// SIGNALS
+  ////////////////////////////////////////////////////////////
 
-  double get stability {
+  List<double> rawSignal =
+      List.generate(120, (i) => 0);
 
-    double avg = average;
+  List<double> filteredSignal =
+      List.generate(120, (i) => 0);
 
-    double variance = history
-        .map((v) => pow(v - avg, 2))
-        .reduce((a, b) => a + b) / history.length;
+  ////////////////////////////////////////////////////////////
+  /// SIGNAL ULTRA LISSÉ
+  ////////////////////////////////////////////////////////////
 
-    return sqrt(variance);
+  List<double> lowPass4HzSignal =
+      List.generate(120, (i) => 0);
+
+  ////////////////////////////////////////////////////////////
+  /// STATUS
+  ////////////////////////////////////////////////////////////
+
+  String status = "Déconnecté";
+
+  ////////////////////////////////////////////////////////////
+  /// BUFFER SÉRIE
+  ////////////////////////////////////////////////////////////
+
+  String serialBuffer = "";
+
+  ////////////////////////////////////////////////////////////
+  /// FILTRE SIMPLE
+  ////////////////////////////////////////////////////////////
+
+  double previousFiltered = 0;
+
+  double lowPassFilter(double input) {
+
+    double alpha = 0.08;
+
+    previousFiltered =
+        alpha * input +
+        (1 - alpha) *
+            previousFiltered;
+
+    return previousFiltered;
 
   }
+
+  ////////////////////////////////////////////////////////////
+  /// SUPER LISSAGE
+  ////////////////////////////////////////////////////////////
+
+  List<double> smoothingBuffer = [];
+
+  double ultraSmooth(double input) {
+
+    //////////////////////////////////////////////////////////
+    /// AJOUTE VALEUR
+    //////////////////////////////////////////////////////////
+
+    smoothingBuffer.add(input);
+
+    //////////////////////////////////////////////////////////
+    /// FENÊTRE
+    //////////////////////////////////////////////////////////
+
+    if (smoothingBuffer.length > 40) {
+
+      smoothingBuffer.removeAt(0);
+
+    }
+
+    //////////////////////////////////////////////////////////
+    /// MOYENNE
+    //////////////////////////////////////////////////////////
+
+    double sum = 0;
+
+    for (double v in smoothingBuffer) {
+
+      sum += v;
+
+    }
+
+    return sum /
+        smoothingBuffer.length;
+
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// INIT
+  ////////////////////////////////////////////////////////////
 
   @override
   void initState() {
 
     super.initState();
 
-    Timer.periodic(const Duration(milliseconds: 300), (timer) {
+    print(
+      SerialPort.availablePorts,
+    );
+
+    connectBluetooth();
+
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// BLUETOOTH
+  ////////////////////////////////////////////////////////////
+
+  void connectBluetooth() {
+
+    try {
+
+      ////////////////////////////////////////////////////////
+      /// COM3 = ESP32
+      ////////////////////////////////////////////////////////
+
+      port = SerialPort("COM3");
+
+      bool opened =
+          port!.openReadWrite();
+
+      if (opened) {
+
+        setState(() {
+
+          status =
+              "muFLOW connecté";
+
+        });
+
+        final reader =
+            SerialPortReader(port!);
+
+        //////////////////////////////////////////////////////
+        /// BUFFER SÉRIE
+        //////////////////////////////////////////////////////
+
+        reader.stream.listen((data) {
+
+          try {
+
+            //////////////////////////////////////////////////
+            /// AJOUTE AU BUFFER
+            //////////////////////////////////////////////////
+
+            serialBuffer +=
+                String.fromCharCodes(data);
+
+            //////////////////////////////////////////////////
+            /// SPLIT LIGNES
+            //////////////////////////////////////////////////
+
+            List<String> lines =
+                serialBuffer.split('\n');
+
+            //////////////////////////////////////////////////
+            /// GARDE DERNIÈRE LIGNE
+            //////////////////////////////////////////////////
+
+            serialBuffer = lines.last;
+
+            //////////////////////////////////////////////////
+            /// TRAITE LIGNES COMPLÈTES
+            //////////////////////////////////////////////////
+
+            for (int i = 0;
+                i < lines.length - 1;
+                i++) {
+
+              String received =
+                  lines[i].trim();
+
+              if (received.isEmpty) {
+                continue;
+              }
+
+              print(received);
+
+              //////////////////////////////////////////////////
+              /// ADC BRUT
+              //////////////////////////////////////////////////
+
+              double adc =
+                  double.tryParse(
+                        received,
+                      ) ??
+                      0.0;
+
+              adc = adc.clamp(
+                0.0,
+                4095.0,
+              );
+
+              //////////////////////////////////////////////////
+              /// ADC → VOLTS
+              //////////////////////////////////////////////////
+
+              double voltage =
+                  (adc / 4095.0) *
+                      3.3;
+
+              //////////////////////////////////////////////////
+              /// FILTRE SIMPLE
+              //////////////////////////////////////////////////
+
+              double filtered =
+                  lowPassFilter(
+                    voltage,
+                  );
+
+              //////////////////////////////////////////////////
+              /// ULTRA LISSAGE
+              //////////////////////////////////////////////////
+
+              double filtered4Hz =
+                  ultraSmooth(
+                    voltage,
+                  );
+
+              if (!mounted) return;
+
+              setState(() {
+
+                //////////////////////////////////////////////////
+                /// SIGNAL BRUT
+                //////////////////////////////////////////////////
+
+                rawSignal.removeAt(0);
+
+                rawSignal.add(
+                  voltage,
+                );
+
+                //////////////////////////////////////////////////
+                /// SIGNAL FILTRÉ
+                //////////////////////////////////////////////////
+
+                filteredSignal
+                    .removeAt(0);
+
+                filteredSignal.add(
+                  filtered,
+                );
+
+                //////////////////////////////////////////////////
+                /// SIGNAL ULTRA LISSÉ
+                //////////////////////////////////////////////////
+
+                lowPass4HzSignal
+                    .removeAt(0);
+
+                lowPass4HzSignal.add(
+                  filtered4Hz,
+                );
+
+              });
+
+            }
+
+          }
+
+          catch (e) {
+
+            print(e);
+
+          }
+
+        });
+
+      }
+
+      else {
+
+        setState(() {
+
+          status =
+              "Impossible d'ouvrir COM3";
+
+        });
+
+      }
+
+    }
+
+    catch (e) {
+
+      print(e);
 
       setState(() {
 
-        double next = history.last +
-            (Random().nextDouble() - 0.5) * 0.05;
-
-        next = next.clamp(0.2, 0.9);
-
-        history.removeAt(0);
-        history.add(next);
-
-        pressure = 320 + Random().nextInt(60);
+        status =
+            "Erreur Bluetooth";
 
       });
 
-    });
+    }
 
   }
 
-  Widget dataRow(String name, String value) {
+  @override
+  void dispose() {
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+    port?.close();
 
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(name),
-          Text(value,
-              style: const TextStyle(fontWeight: FontWeight.bold))
-        ],
+    super.dispose();
+
+  }
+
+  ////////////////////////////////////////////////////////////
+  /// GRAPH CARD
+  ////////////////////////////////////////////////////////////
+
+  Widget graphCard(
+    String title,
+    List<double> signal,
+    Color color,
+  ) {
+
+    return Card(
+
+      elevation: 3,
+
+      child: Padding(
+
+        padding:
+            const EdgeInsets.all(20),
+
+        child: Column(
+
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+
+          children: [
+
+            Text(
+
+              title,
+
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight:
+                    FontWeight.bold,
+              ),
+
+            ),
+
+            const SizedBox(height: 20),
+
+            SizedBox(
+
+              height: 220,
+
+              child: CustomPaint(
+
+                painter: SignalGraph(
+                  signal,
+                  color,
+                ),
+
+                size: Size.infinite,
+
+              ),
+
+            ),
+
+          ],
+
+        ),
+
       ),
+
     );
 
   }
+
+  ////////////////////////////////////////////////////////////
+  /// BUILD
+  ////////////////////////////////////////////////////////////
 
   @override
   Widget build(BuildContext context) {
 
     return Scaffold(
-      appBar: AppBar(title: const Text("Analyse du souffle")),
+
+      appBar: AppBar(
+        title:
+            const Text(
+              "Analyse Bluetooth",
+            ),
+      ),
 
       body: Padding(
-        padding: const EdgeInsets.all(20),
 
-        child: Column(
+        padding:
+            const EdgeInsets.all(20),
+
+        child: ListView(
 
           children: [
 
             Card(
-              elevation: 3,
-              child: Container(
-                height: 220,
-                padding: const EdgeInsets.all(20),
 
-                child: CustomPaint(
-                  painter: BreathGraph(history),
-                  size: Size.infinite,
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 30),
-
-            Card(
-              elevation: 3,
               child: Padding(
-                padding: const EdgeInsets.all(20),
 
-                child: Column(
+                padding:
+                    const EdgeInsets.all(
+                        14),
+
+                child: Row(
 
                   children: [
 
-                    dataRow(
-                        "Souffle instantané",
-                        breath.toStringAsFixed(2)),
+                    const Icon(
+                      Icons.bluetooth,
+                    ),
 
-                    dataRow(
-                        "Souffle moyen",
-                        average.toStringAsFixed(2)),
+                    const SizedBox(
+                        width: 10),
 
-                    dataRow(
-                        "Stabilité",
-                        stability.toStringAsFixed(3)),
-
-                    dataRow(
-                        "Pression capteur",
-                        pressure.toString()),
+                    Text(status),
 
                   ],
 
                 ),
+
               ),
-            )
+
+            ),
+
+            const SizedBox(height: 20),
+
+            //////////////////////////////////////////////////
+            /// SIGNAL BRUT
+            //////////////////////////////////////////////////
+
+            graphCard(
+              "Signal brut",
+              rawSignal,
+              Colors.red,
+            ),
+
+            const SizedBox(height: 20),
+
+            //////////////////////////////////////////////////
+            /// SIGNAL FILTRÉ
+            //////////////////////////////////////////////////
+
+            graphCard(
+              "Signal filtré",
+              filteredSignal,
+              Colors.green,
+            ),
+
+            const SizedBox(height: 20),
+
+            //////////////////////////////////////////////////
+            /// SIGNAL ULTRA LISSÉ
+            //////////////////////////////////////////////////
+
+            graphCard(
+              "Souffle stabilisé",
+              lowPass4HzSignal,
+              Colors.blue,
+            ),
 
           ],
 
         ),
+
       ),
+
     );
+
   }
+
 }
 
 ////////////////////////////////////////////////////////////
 /// HISTORIQUE
 ////////////////////////////////////////////////////////////
 
-class HistoryPage extends StatelessWidget {
+class HistoryPage extends StatefulWidget {
+
   const HistoryPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  State<HistoryPage> createState() =>
+      _HistoryPageState();
 
-    return Scaffold(
-      appBar: AppBar(title: const Text("Historique")),
-
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-
-        children: [
-
-          historyCard(
-              "Frère Jacques",
-              78,
-              [0.35,0.55,0.58,0.42,0.47],
-              [0.4,0.5,0.6,0.4,0.5]),
-
-          historyCard(
-              "Exercice souffle long",
-              84,
-              [0.5,0.52,0.53,0.55,0.57],
-              [0.5,0.5,0.5,0.5,0.5]),
-
-        ],
-      ),
-    );
-  }
-
-  Widget historyCard(
-      String title,
-      int score,
-      List<double> real,
-      List<double> ideal) {
-
-    return Card(
-
-      margin: const EdgeInsets.only(bottom: 20),
-
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-
-        child: Column(
-
-          crossAxisAlignment: CrossAxisAlignment.start,
-
-          children: [
-
-            Text(
-              title,
-              style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold),
-            ),
-
-            const SizedBox(height: 6),
-
-            Text("Score : $score"),
-
-            const SizedBox(height: 20),
-
-            SizedBox(
-              height: 180,
-
-              child: CustomPaint(
-                painter: ComparisonGraph(real, ideal),
-                size: Size.infinite,
-              ),
-            ),
-
-          ],
-        ),
-      ),
-    );
-  }
 }
 
-////////////////////////////////////////////////////////////
-/// PRESENTATION
-////////////////////////////////////////////////////////////
+class _HistoryPageState
+    extends State<HistoryPage> {
 
-class AboutPage extends StatelessWidget {
-  const AboutPage({super.key});
+  SerialPort? port;
 
-  Widget section(String title, String text) {
+  String serialBuffer = "";
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 14),
+  List<double> rawSignal =
+      List.generate(120, (_) => 0);
 
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  List<double> filteredSignal =
+      List.generate(120, (_) => 0);
 
-        children: [
+  List<double> smoothSignal =
+      List.generate(120, (_) => 0);
 
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
+  double previousFiltered = 0;
+
+  List<double> smoothingBuffer = [];
+
+  //////////////////////////////////////////////////////
+  /// PASSE BAS
+  //////////////////////////////////////////////////////
+
+  double lowPassFilter(double input) {
+
+    const double alpha = 0.08;
+
+    previousFiltered =
+        alpha * input +
+        (1 - alpha) *
+            previousFiltered;
+
+    return previousFiltered;
+
+  }
+
+  //////////////////////////////////////////////////////
+  /// MOYENNE GLISSANTE
+  //////////////////////////////////////////////////////
+
+  double ultraSmooth(double input) {
+
+    smoothingBuffer.add(input);
+
+    if (smoothingBuffer.length > 40) {
+
+      smoothingBuffer.removeAt(0);
+
+    }
+
+    double sum = 0;
+
+    for (double v in smoothingBuffer) {
+
+      sum += v;
+
+    }
+
+    return sum /
+        smoothingBuffer.length;
+
+  }
+
+  @override
+  void initState() {
+
+    super.initState();
+
+    connectBluetooth();
+
+  }
+
+  void connectBluetooth() {
+
+    try {
+
+      port = SerialPort("COM3");
+
+      if (!port!.openReadWrite()) {
+        return;
+      }
+
+      final reader =
+          SerialPortReader(port!);
+
+      reader.stream.listen((data) {
+
+        serialBuffer +=
+            String.fromCharCodes(data);
+
+        List<String> lines =
+            serialBuffer.split('\n');
+
+        serialBuffer = lines.last;
+
+        for (int i = 0;
+            i < lines.length - 1;
+            i++) {
+
+          String received =
+              lines[i].trim();
+
+          if (received.isEmpty) {
+            continue;
+          }
+
+          double adc =
+              double.tryParse(
+                    received,
+                  ) ??
+                  0;
+
+          adc = adc.clamp(
+            0,
+            4095,
+          );
+
+          double voltage =
+              (adc / 4095.0) *
+                  3.3;
+
+          double filtered =
+              lowPassFilter(
+            voltage,
+          );
+
+          double smooth =
+              ultraSmooth(
+            voltage,
+          );
+
+          if (!mounted) {
+            return;
+          }
+
+          setState(() {
+
+            rawSignal.removeAt(0);
+            rawSignal.add(
+              voltage,
+            );
+
+            filteredSignal
+                .removeAt(0);
+
+            filteredSignal.add(
+              filtered,
+            );
+
+            smoothSignal
+                .removeAt(0);
+
+            smoothSignal.add(
+              smooth,
+            );
+
+          });
+
+        }
+
+      });
+
+    } catch (_) {}
+
+  }
+
+  @override
+  void dispose() {
+
+    port?.close();
+
+    super.dispose();
+
+  }
+
+  @override
+  Widget build(
+    BuildContext context,
+  ) {
+
+    return Scaffold(
+
+      appBar: AppBar(
+        title: const Text(
+          "Historique",
+        ),
+      ),
+
+      body: Padding(
+
+        padding:
+            const EdgeInsets.all(
+                20),
+
+        child: Card(
+
+          child: Padding(
+
+            padding:
+                const EdgeInsets.all(
+                    20),
+
+            child: Column(
+
+              crossAxisAlignment:
+                  CrossAxisAlignment
+                      .start,
+
+              children: [
+
+                const Text(
+
+                  "Comparaison des signaux",
+
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight:
+                        FontWeight.bold,
+                  ),
+
+                ),
+
+                const SizedBox(
+                    height: 10),
+
+                const Row(
+
+                  children: [
+
+                    Icon(
+                      Icons.circle,
+                      color:
+                          Colors.red,
+                      size: 12,
+                    ),
+
+                    SizedBox(
+                        width: 5),
+
+                    Text("Brut"),
+
+                    SizedBox(
+                        width: 20),
+
+                    Icon(
+                      Icons.circle,
+                      color: Colors
+                          .green,
+                      size: 12,
+                    ),
+
+                    SizedBox(
+                        width: 5),
+
+                    Text("Filtré"),
+
+                    SizedBox(
+                        width: 20),
+
+                    Icon(
+                      Icons.circle,
+                      color:
+                          Colors.blue,
+                      size: 12,
+                    ),
+
+                    SizedBox(
+                        width: 5),
+
+                    Text(
+                        "Stabilisé"),
+
+                  ],
+
+                ),
+
+                const SizedBox(
+                    height: 20),
+
+                Expanded(
+
+                  child: CustomPaint(
+
+                    painter:
+                        TripleGraph(
+
+                      rawSignal,
+
+                      filteredSignal,
+
+                      smoothSignal,
+
+                    ),
+
+                    size:
+                        Size.infinite,
+
+                  ),
+
+                ),
+
+              ],
+
             ),
+
           ),
 
-          const SizedBox(height: 6),
+        ),
 
-          Text(text),
-
-        ],
       ),
+
+    );
+
+  }
+
+}
+
+class TripleGraph extends CustomPainter {
+
+  final List<double> raw;
+  final List<double> filtered;
+  final List<double> smooth;
+
+  TripleGraph(
+    this.raw,
+    this.filtered,
+    this.smooth,
+  );
+
+  @override
+  void paint(
+    Canvas canvas,
+    Size size,
+  ) {
+
+    //////////////////////////////////////////////////////
+    /// MIN / MAX COMMUNS
+    //////////////////////////////////////////////////////
+
+    List<double> all = [
+
+      ...raw,
+      ...filtered,
+      ...smooth,
+
+    ];
+
+    double minValue =
+        all.reduce(min);
+
+    double maxValue =
+        all.reduce(max);
+
+    //////////////////////////////////////////////////////
+    /// GRILLE
+    //////////////////////////////////////////////////////
+
+    final grid = Paint()
+
+      ..color = Colors.grey.withOpacity(0.2)
+
+      ..strokeWidth = 1;
+
+    final textPainter = TextPainter(
+
+      textDirection:
+          TextDirection.ltr,
+
+    );
+
+    //////////////////////////////////////////////////////
+    /// AXE Y + VALEURS EN VOLTS
+    //////////////////////////////////////////////////////
+
+    for (int i = 0; i < 5; i++) {
+
+      double y =
+          i * size.height / 4;
+
+      canvas.drawLine(
+
+        Offset(40, y),
+
+        Offset(
+          size.width,
+          y,
+        ),
+
+        grid,
+
+      );
+
+      double value =
+
+          maxValue -
+
+          (i *
+              (maxValue -
+                      minValue) /
+              4);
+
+      textPainter.text = TextSpan(
+
+        text:
+            "${value.toStringAsFixed(2)} V",
+
+        style: const TextStyle(
+
+          color: Colors.black,
+
+          fontSize: 11,
+
+        ),
+
+      );
+
+      textPainter.layout();
+
+      textPainter.paint(
+
+        canvas,
+
+        Offset(
+          0,
+          y - 8,
+        ),
+
+      );
+
+    }
+
+    //////////////////////////////////////////////////////
+    /// COURBES
+    //////////////////////////////////////////////////////
+
+    drawSignal(
+
+      canvas,
+      size,
+
+      raw,
+
+      Colors.red,
+
+      minValue,
+      maxValue,
+
+    );
+
+    drawSignal(
+
+      canvas,
+      size,
+
+      filtered,
+
+      Colors.green,
+
+      minValue,
+      maxValue,
+
+    );
+
+    drawSignal(
+
+      canvas,
+      size,
+
+      smooth,
+
+      Colors.blue,
+
+      minValue,
+      maxValue,
+
+    );
+
+  }
+
+  //////////////////////////////////////////////////////
+  /// DESSIN D'UNE COURBE
+  //////////////////////////////////////////////////////
+
+  void drawSignal(
+
+    Canvas canvas,
+    Size size,
+    List<double> data,
+    Color color,
+    double minValue,
+    double maxValue,
+
+  ) {
+
+    final paint = Paint()
+
+      ..color = color
+
+      ..strokeWidth = 2
+
+      ..style =
+          PaintingStyle.stroke;
+
+    final path = Path();
+
+    for (
+      int i = 0;
+      i < data.length;
+      i++
+    ) {
+
+      ////////////////////////////////////////////////////
+      /// DÉCALAGE DE 40 PX POUR
+      /// LAISSER LA PLACE À L'AXE Y
+      ////////////////////////////////////////////////////
+
+      double x =
+
+          40 +
+
+          i *
+
+              (size.width - 40) /
+
+              data.length;
+
+      ////////////////////////////////////////////////////
+      /// NORMALISATION
+      ////////////////////////////////////////////////////
+
+      double normalized =
+
+          (data[i] - minValue) /
+
+          (maxValue -
+                  minValue +
+              0.0001);
+
+      normalized =
+          normalized.clamp(
+              0.0,
+              1.0);
+
+      double y =
+
+          size.height -
+
+          normalized *
+              size.height;
+
+      if (i == 0) {
+
+        path.moveTo(
+          x,
+          y,
+        );
+
+      }
+
+      else {
+
+        path.lineTo(
+          x,
+          y,
+        );
+
+      }
+
+    }
+
+    canvas.drawPath(
+      path,
+      paint,
     );
 
   }
 
   @override
+  bool shouldRepaint(
+      CustomPainter oldDelegate) {
+
+    return true;
+
+  }
+
+}
+////////////////////////////////////////////////////////////
+/// ABOUT
+////////////////////////////////////////////////////////////
+
+class AboutPage extends StatelessWidget {
+
+  const AboutPage({super.key});
+
+  @override
   Widget build(BuildContext context) {
 
     return Scaffold(
-      appBar: AppBar(title: const Text("Présentation du projet")),
 
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-
-        child: ListView(
-
-          children: [
-
+      appBar: AppBar(
+        title:
             const Text(
-              "BreathCoach",
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-              ),
+              "Présentation",
             ),
-
-            const SizedBox(height: 20),
-
-            section(
-              "Objectif du projet",
-              "BreathCoach est une application pédagogique destinée "
-              "à aider les musiciens à vent (flûte, saxophone, etc.) "
-              "à mieux comprendre et contrôler leur souffle.",
-            ),
-
-            section(
-              "Pourquoi mesurer le souffle ?",
-              "Le contrôle du souffle est essentiel pour les instruments "
-              "à vent. Il influence directement :\n"
-              "• l'intensité (piano / forte)\n"
-              "• la stabilité du son\n"
-              "• la durée des notes\n"
-              "• la qualité du timbre.",
-            ),
-
-            section(
-              "Principe du système",
-              "Le musicien souffle dans l'instrument.\n"
-              "Un capteur mesure la pression ou le débit d'air.\n"
-              "Les données sont envoyées via Bluetooth vers l'application.\n"
-              "L'application compare ensuite le souffle réel "
-              "au souffle attendu pour chaque note.",
-            ),
-
-            section(
-              "Fonctionnalités du prototype",
-              "• partition animée\n"
-              "• feedback pédagogique en temps réel\n"
-              "• analyse du souffle\n"
-              "• historique des exercices\n"
-              "• entraînement ciblé du souffle",
-            ),
-
-            section(
-              "Contexte du projet",
-              "Ce prototype est développé dans le cadre d'un projet "
-              "académique visant à explorer l'utilisation des technologies "
-              "numériques pour l'apprentissage musical.",
-            ),
-
-          ],
-
-        ),
       ),
+
+      body: const Padding(
+
+        padding:
+            EdgeInsets.all(20),
+
+        child: Text(
+          "BreathCoach aide les musiciens à contrôler leur souffle.",
+        ),
+
+      ),
+
     );
+
   }
+
 }
 
 ////////////////////////////////////////////////////////////
 /// GRAPHES
 ////////////////////////////////////////////////////////////
 
-class BreathGraph extends CustomPainter{
+class SignalGraph extends CustomPainter {
 
   final List<double> data;
 
-  BreathGraph(this.data);
+  final Color color;
+
+  SignalGraph(
+    this.data,
+    this.color,
+  );
 
   @override
-  void paint(Canvas canvas,Size size){
+  void paint(
+    Canvas canvas,
+    Size size,
+  ) {
 
-    final paint=Paint()
-      ..color=Colors.indigo
-      ..strokeWidth=3
-      ..style=PaintingStyle.stroke;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 3
+      ..style =
+          PaintingStyle.stroke;
 
-    final path=Path();
+    final grid = Paint()
+      ..color = Colors.grey
+          .withOpacity(0.2)
+      ..strokeWidth = 1;
 
-    for(int i=0;i<data.length;i++){
+    //////////////////////////////////////////////////////
+    /// AUTO ZOOM
+    //////////////////////////////////////////////////////
 
-      double x=i*size.width/data.length;
-      double y=size.height-data[i]*size.height;
+    double minValue =
+        data.reduce(min);
 
-      if(i==0){
-        path.moveTo(x,y);
-      }else{
-        path.lineTo(x,y);
+    double maxValue =
+        data.reduce(max);
+
+    //////////////////////////////////////////////////////
+    /// TEXTE
+    //////////////////////////////////////////////////////
+
+    final textPainter =
+        TextPainter(
+      textDirection:
+          TextDirection.ltr,
+    );
+
+    //////////////////////////////////////////////////////
+    /// GRILLE + ÉCHELLES
+    //////////////////////////////////////////////////////
+
+    for (int i = 0; i < 5; i++) {
+
+      double y =
+          i * size.height / 4;
+
+      canvas.drawLine(
+
+        Offset(40, y),
+
+        Offset(
+          size.width,
+          y,
+        ),
+
+        grid,
+
+      );
+
+      double value =
+          maxValue -
+          (i *
+              (maxValue -
+                      minValue) /
+              4);
+
+      textPainter.text = TextSpan(
+
+        text:
+            value.toStringAsFixed(2),
+
+        style: const TextStyle(
+          color: Colors.black,
+          fontSize: 11,
+        ),
+
+      );
+
+      textPainter.layout();
+
+      textPainter.paint(
+        canvas,
+        Offset(0, y - 8),
+      );
+
+    }
+
+    //////////////////////////////////////////////////////
+    /// SIGNAL
+    //////////////////////////////////////////////////////
+
+    final path = Path();
+
+    for (int i = 0;
+        i < data.length;
+        i++) {
+
+      double x =
+          40 +
+          i *
+              (size.width - 40) /
+              data.length;
+
+      ////////////////////////////////////////////////////
+      /// NORMALISATION
+      ////////////////////////////////////////////////////
+
+      double normalized =
+          (data[i] - minValue) /
+          (maxValue -
+                  minValue +
+              0.0001);
+
+      normalized =
+          normalized.clamp(
+              0.0, 1.0);
+
+      double y =
+          size.height -
+              (normalized *
+                  size.height);
+
+      if (i == 0) {
+
+        path.moveTo(x, y);
+
+      }
+
+      else {
+
+        path.lineTo(x, y);
+
       }
 
     }
 
-    canvas.drawPath(path,paint);
+    canvas.drawPath(path, paint);
 
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate)=>true;
+  bool shouldRepaint(
+    covariant CustomPainter
+        oldDelegate,
+  ) {
+
+    return true;
+
+  }
 
 }
 
-class ComparisonGraph extends CustomPainter{
+////////////////////////////////////////////////////////////
+/// COMPARAISON
+////////////////////////////////////////////////////////////
+
+class ComparisonGraph
+    extends CustomPainter {
 
   final List<double> real;
+
   final List<double> ideal;
 
-  ComparisonGraph(this.real,this.ideal);
+  ComparisonGraph(
+    this.real,
+    this.ideal,
+  );
 
   @override
-  void paint(Canvas canvas,Size size){
+  void paint(
+    Canvas canvas,
+    Size size,
+  ) {
 
-    final realPaint=Paint()
-      ..color=Colors.blue
-      ..strokeWidth=3
-      ..style=PaintingStyle.stroke;
+    final realPaint = Paint()
+      ..color = Colors.blue
+      ..strokeWidth = 3
+      ..style =
+          PaintingStyle.stroke;
 
-    final idealPaint=Paint()
-      ..color=Colors.green
-      ..strokeWidth=3
-      ..style=PaintingStyle.stroke;
+    final idealPaint = Paint()
+      ..color = Colors.green
+      ..strokeWidth = 3
+      ..style =
+          PaintingStyle.stroke;
 
-    final realPath=Path();
-    final idealPath=Path();
+    final realPath = Path();
 
-    for(int i=0;i<real.length;i++){
+    final idealPath = Path();
 
-      double x=i*size.width/real.length;
+    for (int i = 0;
+        i < real.length;
+        i++) {
 
-      double yr=size.height-real[i]*size.height;
-      double yi=size.height-ideal[i]*size.height;
+      double x =
+          i *
+              size.width /
+              real.length;
 
-      if(i==0){
-        realPath.moveTo(x,yr);
-        idealPath.moveTo(x,yi);
-      }else{
-        realPath.lineTo(x,yr);
-        idealPath.lineTo(x,yi);
+      double yr =
+          size.height -
+              real[i] *
+                  size.height;
+
+      double yi =
+          size.height -
+              ideal[i] *
+                  size.height;
+
+      if (i == 0) {
+
+        realPath.moveTo(x, yr);
+
+        idealPath.moveTo(x, yi);
+
+      }
+
+      else {
+
+        realPath.lineTo(x, yr);
+
+        idealPath.lineTo(x, yi);
+
       }
 
     }
 
-    canvas.drawPath(realPath,realPaint);
-    canvas.drawPath(idealPath,idealPaint);
+    canvas.drawPath(
+      realPath,
+      realPaint,
+    );
 
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate)=>true;
-
-}
-
-/////////////////////////////////////////////////////////////
-/// MODE D'EMPLOI
-/////////////////////////////////////////////////////////////
-
-class HelpPage extends StatelessWidget {
-  const HelpPage({super.key});
-
-  Widget step(String title, String description) {
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-
-        children: [
-
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-
-          const SizedBox(height: 6),
-
-          Text(description),
-
-        ],
-      ),
+    canvas.drawPath(
+      idealPath,
+      idealPaint,
     );
 
   }
+
+  @override
+  bool shouldRepaint(
+    covariant CustomPainter
+        oldDelegate,
+  ) {
+
+    return true;
+
+  }
+
+}
+
+////////////////////////////////////////////////////////////
+/// HELP
+////////////////////////////////////////////////////////////
+
+class HelpPage extends StatelessWidget {
+
+  const HelpPage({super.key});
 
   @override
   Widget build(BuildContext context) {
 
     return Scaffold(
-      appBar: AppBar(title: const Text("Mode d'emploi")),
 
-      body: Padding(
-        padding: const EdgeInsets.all(20),
+      appBar:
+          AppBar(
+            title:
+                const Text("Help"),
+          ),
 
-        child: ListView(
+      body: const Padding(
 
-          children: [
+        padding:
+            EdgeInsets.all(20),
 
-            const Text(
-              "Comment utiliser BreathCoach",
-              style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            step(
-              "1. Choisir un exercice",
-              "Dans le menu principal, sélectionner 'Commencer un exercice'. "
-              "La partition animée apparaît et défile sous le curseur.",
-            ),
-
-            step(
-              "2. Suivre la partition",
-              "Chaque note possède un niveau de souffle recommandé. "
-              "L'objectif est de maintenir le souffle dans la zone idéale.",
-            ),
-
-            step(
-              "3. Interpréter la barre de souffle",
-              "La barre de souffle change de couleur :\n"
-              "Vert : souffle correct\n"
-              "Jaune : proche de la cible\n"
-              "Rouge : trop faible ou trop fort",
-            ),
-
-            step(
-              "4. Feedback en temps réel",
-              "Le système affiche 'Perfect', 'Good' ou 'Miss' selon "
-              "la précision du souffle par rapport à la valeur attendue.",
-            ),
-
-            step(
-              "5. Analyse du souffle",
-              "Le mode analyse permet d'observer les données techniques "
-              "du souffle : stabilité, moyenne et évolution dans le temps.",
-            ),
-
-            step(
-              "6. Historique",
-              "La section historique permet de revoir les exercices passés "
-              "et de comparer le souffle réel avec le souffle idéal.",
-            ),
-
-          ],
-
+        child: Text(
+          "Choisir un exercice puis souffler.",
         ),
+
       ),
+
     );
+
   }
+
 }
